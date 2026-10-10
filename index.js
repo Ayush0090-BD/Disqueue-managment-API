@@ -11,8 +11,8 @@ app.post('/jobs', (req, res) => {
     createdat: new Date().toISOString()
 
   };
-  if(!jobdata.title){
-    return res.status(400).message('Title is required');
+  if(!typeof jobData.title === 'string' || jobData.title.trim() === '') {
+    return res.status(400).json({ error: 'Title is required' });
   }
   jobs.push(jobData);
   // Process the job asynchronously (simulated with a timeout)
