@@ -1,57 +1,75 @@
-# Distributed Job Processing System
+# Disqueue — Distributed Job Queue
 
-A backend project exploring asynchronous job processing using Node.js, Express, and Redis. The goal is to build a queue-based system that separates job submission from job execution and progressively introduces reliability, concurrency, and failure recovery.
+A backend engineering project built with Node.js, Express.js, and Redis to explore asynchronous job processing, producer-consumer architecture, job lifecycle tracking, and reliable message delivery.
 
-> **Project status:** Early development — Redis-backed job producer implemented and tested.
+The goal is to develop a queue-based job processing system in which API requests enqueue jobs and independent workers execute them.
+
+> **Status:** In development. Job submission, Redis-backed queueing, independent job consumption, metadata storage, job lookup, and simulated lifecycle transitions are implemented.
 
 ## Tech Stack
 
-- **Node.js** — JavaScript runtime
-- **Express.js** — REST API
-- **Redis** — Queue storage
-- **Docker** — Redis development environment
-
-## Current Features
-
-- `POST /jobs` endpoint for submitting jobs.
-- Request validation to reject missing, non-string, or empty titles.
-- Unique job IDs generated using UUIDs.
-- Job metadata containing an ID, title, status, and creation timestamp.
-- JSON serialization before storing jobs in Redis.
-- HTTP `202 Accepted` response when a job is successfully enqueued.
-- Basic error handling for Redis write failures.
-- Verified job availability after restarting the Node.js server while Redis remains running.
+- **Runtime:** Node.js
+- **API:** Express.js
+- **Queue and metadata storage:** Redis
+- **Redis client:** node-redis
+- **Containerization:** Docker
+- **API testing:** Requestly, curl
+- **Version control:** Git and GitHub
 
 ## Architecture
 
 ```text
-Client
-  |
-  | POST /jobs
-  v
-Express API
-  |
-  | Validate request
-  | Generate job ID
-  | Serialize job
-  v
-Redis List: jobs
+                   Client
+                     |
+                     | POST /jobs
+                     v
+              Express Producer
+                     |
+              +------+------+
+              |             |
+              v             v
+       Redis List: jobs   Redis Hash
+       Pending jobs       job:<jobId>
+              |           Job metadata
+              v
+       Independent Worker
+              |
+       Consume and process
+              |
+              v
+       Update job status
+              |
+              v
+       Redis Hash: job:<jobId>
 ```
 
-The API currently acts as a **producer**: it accepts jobs and places them in a Redis list. Job execution by independent workers has not yet been implemented.
+The producer and worker are separate processes that communicate through Redis. Job metadata is stored independently of the pending queue so that a job can still be queried after the worker consumes it.
+
+## Implemented Features
+
+- REST API for submitting jobs.
+- Request validation for job titles.
+- Unique job IDs generated using UUIDs.
+- Redis-backed queue using a Redis List.
+- Independent worker process that consumes jobs.
+- Blocking job consumption using Redis `BLPOP`.
+- FIFO consumption when jobs are enqueued using `RPUSH` and consumed using `BLPOP`.
+- Job metadata stored in Redis hashes using the `job:<id>` key convention.
+- Job lookup endpoint using a job ID.
+- Basic job lifecycle tracking: `queued`, `processing`, and `completed`.
+- Simulated job execution to demonstrate lifecycle transitions.
+- Basic error handling for Redis connection failures and API operations.
+- Verified that queued jobs can be consumed when the worker starts, including jobs submitted before worker startup.
 
 ## API Reference
 
-### `POST /jobs`
+### 1. Submit a job
 
-Submits a job to the queue.
+`POST /jobs`
 
-**Request**
+Adds a new job to the Redis queue and stores its metadata.
 
-```http
-POST /jobs
-Content-Type: application/json
-```
+**Request body**
 
 ```json
 {
@@ -63,34 +81,95 @@ Content-Type: application/json
 
 ```json
 {
-  "id": "61f64594-83cd-4853-b69b-bdfe5fe4f3d4",
+  "id": "347daa44-4319-4b89-9265-0d9325cd1dff",
   "title": "Generate report",
   "status": "queued",
-  "createdat": "2026-10-12T17:33:54.803Z"
+  "createdat": "2026-10-16T10:00:00.000Z"
 }
 ```
 
-The ID and timestamp above are illustrative examples.
+The ID and timestamp are illustrative. The actual response contains a newly generated UUID and timestamp.
 
-**Validation failure — `400 Bad Request`**
+**Possible responses**
 
-Returned when `title` is missing, is not a string, or contains only whitespace.
+- `202 Accepted` — job accepted and enqueued.
+- `400 Bad Request` — invalid or missing title.
+- `500 Internal Server Error` — job creation failed.
 
-**Redis write failure — `500 Internal Server Error`**
+### 2. Retrieve job metadata
 
-Returned when the API cannot successfully enqueue the job.
+`GET /jobs/:id`
+
+Retrieves a job's metadata using its ID.
+
+**Example request**
+
+```http
+GET /jobs/347daa44-4319-4b89-9265-0d9325cd1dff
+```
+
+**Successful response — `200 OK`**
+
+```json
+{
+  "id": "347daa44-4319-4b89-9265-0d9325cd1dff",
+  "title": "Generate report",
+  "status": "completed",
+  "createdat": "2026-10-16T10:00:00.000Z"
+}
+```
+
+The returned status depends on the job's current lifecycle state.
+
+**Possible responses**
+
+- `200 OK` — job metadata found.
+- `404 Not Found` — no metadata exists for the supplied ID.
+- `500 Internal Server Error` — metadata lookup failed.
+
+## Redis Data Model
+
+### Pending queue
+
+```text
+Key: jobs
+Type: List
+```
+
+Contains serialized job objects waiting to be consumed.
+
+The producer uses `RPUSH` to enqueue jobs, while the worker uses `BLPOP` to consume them in FIFO order.
+
+### Job metadata
+
+```text
+Key: job:<jobId>
+Type: Hash
+```
+
+Each job has its own Redis hash containing fields such as:
+
+```text
+id
+title
+status
+createdat
+```
+
+Separating metadata from the queue allows the API to retrieve a job even after it has been removed from the pending list.
 
 ## Run Locally
 
 ### Prerequisites
 
 - Node.js and npm
-- Docker
+- Docker Desktop
+- Git
 
 ### 1. Clone the repository
 
 ```bash
-git clone <https://github.com/Ayush0090-BD/Disqueue-managment-API>
+git clone <repository-url>
 cd <repository-directory>
 ```
 
@@ -102,75 +181,133 @@ npm install
 
 ### 3. Start Redis
 
-```bash
-docker run -d \
-  --name queue-redis \
-  -p 6379:6379 \
-  redis
-```
-
-If you already have a container named `queue-redis`, start that existing container instead:
+If the existing Redis container is available:
 
 ```bash
 docker start queue-redis
 ```
 
-### 4. Start the API
+To verify the connection:
 
 ```bash
-node src/server.js
+docker exec -it queue-redis redis-cli ping
 ```
 
-The API listens on port `3000`, and the Redis client connects to `localhost:6379`.
+Expected output:
 
-### 5. Submit a job
+```text
+PONG
+```
+
+If you have not created a Redis container yet:
+
+```bash
+docker run -d --name queue-redis -p 6379:6379 redis
+```
+
+### 4. Start the producer API
+
+In the project directory, run:
+
+```bash
+node index.js
+```
+
+The API listens on port `3000` and connects to Redis at `localhost:6379`.
+
+### 5. Start the worker
+
+Open a separate terminal and run:
+
+```bash
+node src/worker.js
+```
+
+The worker connects independently to Redis and waits for jobs.
+
+### 6. Submit a job
 
 Using curl:
 
 ```bash
-curl -i -X POST http://localhost:3000/jobs \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Generate report"}'
+curl.exe -i -X POST http://localhost:3000/jobs -H "Content-Type: application/json" -d "{\"title\":\"Generate report\"}"
 ```
 
-### 6. Inspect queued jobs
+### 7. Retrieve job metadata
+
+Copy the returned ID and request:
+
+```text
+GET http://localhost:3000/jobs/<jobId>
+```
+
+You can also inspect Redis directly:
 
 ```bash
 docker exec -it queue-redis redis-cli LRANGE jobs 0 -1
 ```
 
-This displays the serialized jobs stored in the Redis list.
+Retrieve metadata:
 
-## Roadmap
+```bash
+docker exec -it queue-redis redis-cli HGETALL "job:<jobId>"
+```
 
-- [x] Build the initial Express API.
-- [x] Connect the API to Redis.
-- [x] Validate job submissions and generate unique IDs.
-- [x] Enqueue jobs in Redis.
-- [x] Verify queue contents through Redis CLI.
-- [ ] Implement an independent worker process.
-- [ ] Establish FIFO consumption and test ordering.
-- [ ] Track job lifecycle states.
-- [ ] Implement safe job claiming and recovery after worker failure.
-- [ ] Add retries with exponential backoff.
-- [ ] Introduce a dead-letter queue for jobs that exhaust their retries.
-- [ ] Add idempotency to prevent duplicate effects.
-- [ ] Support multiple workers and configurable concurrency.
-- [ ] Add structured logging and operational metrics.
-- [ ] Handle graceful shutdown.
-- [ ] Add Docker Compose and automated tests.
-- [ ] Perform load testing and document measured results.
+Replace `<jobId>` with the actual UUID.
 
 ## Current Limitations
 
-- Jobs are stored in a Redis list, but reliable worker execution is not implemented yet.
-- A Redis list alone does not guarantee safe recovery if a worker removes a job and crashes.
-- The current persistence test covers a Node.js server restart while Redis stays running. Durability across Redis restarts or container recreation has not yet been verified.
-- Job status is currently included in the submitted job data; a complete job-status tracking API is not implemented.
-- No retry policy, dead-letter queue, or idempotency mechanism is implemented yet.
+This is an evolving learning project, and the current implementation does not yet provide production-grade delivery guarantees.
 
-## Project Objective
+- The worker uses `BLPOP`, which removes a job from the pending queue immediately.
+- A worker crash after consuming a job can result in lost work.
+- The current simulated execution is not real background business processing.
+- Retry policies and a dead-letter queue are not implemented.
+- Job claiming, acknowledgment, and recovery of abandoned jobs are not implemented.
+- Duplicate-delivery protection and idempotency are not implemented.
+- Multi-worker concurrency and race-condition handling require further testing.
+- Redis durability across container recreation has not been fully verified.
+- Automated tests, load tests, structured logging, and operational metrics remain planned work.
 
-Build a progressively more reliable job-processing system while understanding the underlying mechanisms: queue semantics, producer-consumer architecture, concurrency, delivery guarantees, retry policies, failure recovery, and observability.
+## Roadmap
 
-Implementation claims and performance characteristics will be updated as each feature is built and tested.
+- [x] Build the Express producer API.
+- [x] Integrate Redis for queue storage.
+- [x] Validate requests and generate unique job IDs.
+- [x] Implement an independent Redis consumer.
+- [x] Verify FIFO queue behavior.
+- [x] Store job metadata separately from the queue.
+- [x] Implement `GET /jobs/:id`.
+- [x] Add basic job lifecycle status updates.
+- [ ] Replace destructive consumption with atomic job claiming.
+- [ ] Implement job acknowledgment.
+- [ ] Add visibility timeouts and abandoned-job recovery.
+- [ ] Add retries with exponential backoff.
+- [ ] Implement a dead-letter queue.
+- [ ] Add idempotency and duplicate-delivery protection.
+- [ ] Support and test multiple concurrent workers.
+- [ ] Add graceful shutdown and worker failure handling.
+- [ ] Add structured logs and operational metrics.
+- [ ] Add automated tests and failure-injection tests.
+- [ ] Add Docker Compose for repeatable local setup.
+- [ ] Perform load testing and document measured results.
+
+## Learning Objectives
+
+This project is intended to develop practical understanding of:
+
+- Producer-consumer architecture.
+- Redis Lists and Hashes.
+- Blocking queue operations.
+- Asynchronous programming in Node.js.
+- Job lifecycle and state management.
+- At-least-once delivery and duplicate processing.
+- Worker crash recovery.
+- Retry strategies and dead-letter queues.
+- Concurrency, observability, and system reliability.
+
+## Project Philosophy
+
+The focus is not merely to enqueue and process jobs, but to understand what happens when the system behaves unexpectedly.
+
+Each reliability feature will be implemented and tested incrementally, with its guarantees and limitations documented explicitly.
