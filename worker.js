@@ -12,8 +12,12 @@ async function processJobs() {
     const job = await client.blPop('jobs',0);
 
     if(job){
-        const data=JSON.parse(job.element);
+      const data=JSON.parse(job.element);
+      await client.hSet(`job:${data.id}`, 'status', 'processing');
         console.log(`Processing job: ${data.title}`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        await client.hSet(`job:${data.id}`, 'status', 'completed');
+        console.log(`Completed job: ${data.title}`);
     }
   }
 }
