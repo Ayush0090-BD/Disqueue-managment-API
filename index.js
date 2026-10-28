@@ -1,6 +1,8 @@
 const express = require('express');
+require('dotenv').config();
+console.log('JWT_SECRET:', process.env.JWT_SECRET); // Log the JWT secret to verify it's loaded correctly
 const { randomUUID } = require('crypto');
-const bcrpt = require('bcrypt');
+const bcrypt = require('bcrypt');
 const authenticateToken = require('./middleware.js');
 const app = express();
 const jwt = require('jsonwebtoken');
